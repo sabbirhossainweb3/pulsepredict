@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PulsePredict — LitVM Testnet</title>
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.5/dist/ethers.umd.min.js"></script>
+<style>
+:root{--bg:#0b1020;--panel:#131b31;--line:#273451;--text:#edf2ff;--muted:#9aa8c7;--blue:#7c9cff;--green:#5ce0ad;--pink:#ff8ca7}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#18264a 0,#0b1020 55%);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1080px;margin:auto;padding:28px 18px 60px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}
+.brand{font-weight:850;font-size:24px;letter-spacing:-.7px}.brand span{color:var(--blue)}.sub{color:var(--muted);font-size:13px}
+button{border:0;border-radius:12px;padding:11px 15px;font-weight:750;cursor:pointer;background:var(--blue);color:#081027}button.secondary{background:#202d4b;color:var(--text);border:1px solid #354568}button.yes{background:#153f38;color:var(--green);border:1px solid #236d5b}button.no{background:#49243a;color:var(--pink);border:1px solid #773a5c}button:disabled{opacity:.45;cursor:not-allowed}
+.hero{margin:30px 0 22px;padding:28px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(130deg,#182748,#12192d)}
+h1{font-size:clamp(28px,5vw,42px);line-height:1.12;margin:0 0 12px;letter-spacing:-1px}.hero p{color:var(--muted);max-width:650px;margin:0}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.panel,.market{background:rgba(19,27,49,.94);border:1px solid var(--line);border-radius:18px;padding:20px;min-width:0}
+h2{font-size:19px;margin:0 0 14px}label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}
+input{width:100%;padding:12px;border:1px solid #354568;border-radius:10px;background:#0c1428;color:var(--text);font:inherit}
+.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.full{width:100%;margin-top:14px}.notice{margin:18px 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;color:var(--muted);font-size:13px}
+#status{color:var(--muted);overflow-wrap:anywhere}.markets-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:28px 0 14px}.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.market h3{margin:8px 0 12px;font-size:18px;overflow-wrap:anywhere}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#202d4b;color:#cbd7ff;font-size:12px}.meta{font-size:13px;color:var(--muted);margin:7px 0;overflow-wrap:anywhere}.actions{display:flex;gap:8px;margin-top:14px}.actions button{flex:1}.empty{color:var(--muted);padding:22px;border:1px dashed #354568;border-radius:14px}
+footer{color:var(--muted);font-size:12px;margin-top:28px}
+@media(max-width:700px){.grid,.cards{grid-template-columns:1fr}.wrap{padding:18px 12px 40px}.hero{padding:22px}}
+</style>
+</head>
+<body><main class="wrap">
+<header class="top"><div><div class="brand">Pulse<span>Predict</span></div><div class="sub">Community predictions · LitVM LiteForge testnet</div></div><button id="connectBtn" onclick="connectWallet()">Connect MetaMask</button></header>
+<section class="hero"><h1>Predict what happens next.</h1><p>Make YES / NO predictions about YouTube views, X followers, and public milestones. Testnet prototype—use test coins only.</p></section>
+<div class="notice"><strong>Testnet only:</strong> Market creators decide outcomes manually after the closing time. This is an educational prototype, not a trustless oracle. Verify the contract address and never use real funds or share your seed phrase.</div>
+<div class="grid">
+<section class="panel"><h2>Create a market</h2><label for="question">Prediction question</label><input id="question" maxlength="240" placeholder="Will this video reach 100K views by Friday?"><label for="endTime">Market closes at (local time)</label><input id="endTime" type="datetime-local"><button class="full" onclick="createMarket()">Create market</button></section>
+<section class="panel"><h2>Wallet & network</h2><div id="walletInfo" class="meta">Wallet not connected</div><div id="networkInfo" class="meta">Expected chain ID: 4441</div><div class="meta">Contract: <span id="contractShort"></span></div><button class="secondary full" onclick="switchNetwork()">Add / switch LiteForge</button><button class="secondary full" onclick="refreshMarkets()">Refresh markets</button></section>
+</div>
+<div class="markets-head"><h2 style="margin:0">Markets</h2><span class="sub" id="marketCount">Not loaded yet</span></div><div id="markets" class="cards"><div class="empty">Connect MetaMask and refresh to load markets.</div></div>
+<footer>Educational testnet demo. Market outcomes are creator-controlled. The contract has no oracle or dispute process. Native testnet coin is used, not an ERC-20 token.</footer>
+</main>
+<script>
+const CONTRACT_ADDRESS="0xd950619381B9de5720550E11bB9758eff626ae35";
+const CHAIN_ID_HEX="0x1159"; // 4441
+const RPC_URL="https://liteforge.rpc.caldera.xyz/http";
+const EXPLORER_URL="https://liteforge.explorer.caldera.xyz";
+const ABI=[
+ "function marketCount() view returns (uint256)",
+ "function markets(uint256) view returns (address creator,string question,uint256 endTime,uint256 totalYes,uint256 totalNo,bool resolved,bool outcome)",
+ "function yesBets(uint256,address) view returns (uint256)",
+ "function noBets(uint256,address) view returns (uint256)",
+ "function claimed(uint256,address) view returns (bool)",
+ "function createMarket(string question,uint256 endTime) returns (uint256 id)",
+ "function placeBet(uint256 id,bool yes) payable",
+ "function resolveMarket(uint256 id,bool outcome)",
+ "function claimReward(uint256 id)",
+ "event MarketCreated(uint256 indexed id,string question)",
+ "event MarketResolved(uint256 indexed id,bool outcome)"
+];
+let provider,signer,contract,account;
+const $=id=>document.getElementById(id);
+$('contractShort').textContent=CONTRACT_ADDRESS.slice(0,10)+"…"+CONTRACT_ADDRESS.slice(-8);
+function fmt(n){return Number(ethers.formatEther(n)).toLocaleString(undefined,{maximumFractionDigits:5});}
+function dateFmt(ts){return new Date(Number(ts)*1000).toLocaleString();}
+function setStatus(msg){$('walletInfo').textContent=msg;}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function connectWallet(){
+ try{
+  if(!window.ethereum)throw new Error("MetaMask install/enable করুন, তারপর আবার চেষ্টা করুন।");
+  provider=new ethers.BrowserProvider(window.ethereum);await provider.send("eth_requestAccounts",[]);
+  signer=await provider.getSigner();account=await signer.getAddress();contract=new ethers.Contract(CONTRACT_ADDRESS,ABI,signer);
+  const net=await provider.getNetwork();$('connectBtn').textContent=account.slice(0,6)+"…"+account.slice(-4);
+  setStatus("Connected: "+account);$('networkInfo').textContent="Chain ID: "+net.chainId+(net.chainId===4441n?" ✓":" — switch to LiteForge");
+  if(net.chainId===4441n)await refreshMarkets(false);else alert("MetaMask-এ LiteForge (chain ID 4441) network switch করুন।");
+ }catch(e){alert("Wallet connect failed: "+(e.shortMessage||e.message||e));}
+}
+async function switchNetwork(){
+ if(!window.ethereum) return alert("MetaMask পাওয়া যায়নি।");
+ try{await window.ethereum.request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN_ID_HEX}]});}
+ catch(e){if(e.code===4902){try{await window.ethereum.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_ID_HEX,chainName:"LitVM LiteForge",nativeCurrency:{name:"LIT",symbol:"LIT",decimals:18},rpcUrls:[RPC_URL],blockExplorerUrls:[EXPLORER_URL]}]});}catch(err){alert("Network add failed: "+err.message);}}
+ else alert("Network switch failed: "+e.message);}
+}
+async function ensureReady(){if(!contract||!signer)throw new Error("আগে Connect MetaMask চাপুন।");const net=await provider.getNetwork();if(net.chainId!==4441n)throw new Error("MetaMask LiteForge (chain ID 4441) network-এ নেই।");}
+async function sendTx(tx){$('status')?.remove();alert("Transaction পাঠানো হয়েছে। Wallet-এ fee দেখে confirm করো।\n"+tx.hash);await tx.wait();alert("Transaction confirmed!");}
+async function createMarket(){
+ try{await ensureReady();const q=$('question').value.trim(),dt=$('endTime').value;if(!q)throw new Error("Prediction question লিখুন।");if(!dt)throw new Error("Closing time নির্বাচন করুন।");
+ const end=Math.floor(new Date(dt).getTime()/1000);if(!Number.isFinite(end)||end<=Math.floor(Date.now()/1000))throw new Error("Closing time ভবিষ্যতের হতে হবে।");
+ await sendTx(await contract.createMarket(q,end));$('question').value="";await refreshMarkets(false);
+ }catch(e){alert("Create market failed: "+(e.shortMessage||e.reason||e.message||e));}
+}
+async function placeBet(id,yes){
+ try{await ensureReady();const amount=prompt("কত native testnet coin bet করবে? উদাহরণ: 0.01");if(amount===null)return;
+ if(!/^\d+(\.\d+)?$/.test(amount)||!Number.isFinite(Number(amount))||Number(amount)<=0)throw new Error("সঠিক positive amount দাও।");
+ const m=await contract.markets(id);if(Date.now()/1000>=Number(m.endTime))throw new Error("Market-এর সময় শেষ।");
+ await sendTx(await contract.placeBet(id,yes,{value:ethers.parseEther(amount)}));await refreshMarkets(false);
+ }catch(e){alert("Bet failed: "+(e.shortMessage||e.reason||e.message||e));}
+}
+async function resolveMarket(id,outcome){
+ try{await ensureReady();const m=await contract.markets(id);if(m.creator.toLowerCase()!==account.toLowerCase())throw new Error("শুধু market creator resolve করতে পারবে।");if(Date.now()/1000<Number(m.endTime))throw new Error("Market-এর closing time এখনও আসেনি।");if(m.resolved)throw new Error("এই market resolve হয়ে গেছে।");
+ if(!confirm("Market #"+id+"-এর result "+(outcome?"YES":"NO")+" করতে চাও?"))return;
+ await sendTx(await contract.resolveMarket(id,outcome));await refreshMarkets(false);
+ }catch(e){alert("Resolve failed: "+(e.shortMessage||e.reason||e.message||e));}
+}
+async function claimReward(id){
+ try{await ensureReady();const m=await contract.markets(id);if(!m.resolved)throw new Error("Result এখনও resolve হয়নি।");if(await contract.claimed(id,account))throw new Error("এই wallet থেকে আগে claim করা হয়েছে।");
+ const [y,n]=await Promise.all([contract.yesBets(id,account),contract.noBets(id,account)]);const winning=m.outcome?y:n;const totalWinning=m.outcome?m.totalYes:m.totalNo;
+ if(totalWinning!==0n&&winning===0n)throw new Error("এই wallet winning side-এ bet করেনি; payout নেই।");
+ await sendTx(await contract.claimReward(id));await refreshMarkets(false);
+ }catch(e){alert("Claim failed: "+(e.shortMessage||e.reason||e.message||e));}
+}
+async function refreshMarkets(showError=true){
+ try{await ensureReady();const count=Number(await contract.marketCount());$('marketCount').textContent=count+" total";
+ if(count===0){$('markets').innerHTML='<div class="empty">এখনও কোনো market তৈরি হয়নি। Create a market দিয়ে শুরু করো।</div>';return;}
+ const items=[];for(let id=count;id>=1;id--){const m=await contract.markets(id);items.push({id,m});}
+ $('markets').innerHTML="";
+ for(const {id,m} of items){
+  const ended=Date.now()/1000>=Number(m.endTime),resolved=m.resolved,creator=m.creator.toLowerCase()===account.toLowerCase();
+  const [y,n,claimed]=await Promise.all([contract.yesBets(id,account),contract.noBets(id,account),contract.claimed(id,account)]);
+  const card=document.createElement('article');card.className='market';
+  let status=resolved?("Resolved · "+(m.outcome?"YES":"NO")):ended?"Closed · waiting for creator":"Open";
+  let html=`<span class="pill">Market #${id}</span> <span class="pill">${status}</span><h3>${escapeHtml(m.question)}</h3>
+  <div class="meta">Closes: ${escapeHtml(dateFmt(m.endTime))}</div><div class="meta">Creator: ${escapeHtml(m.creator)}</div>
+  <div class="row"><div class="meta">YES pool<br><strong>${fmt(m.totalYes)}</strong></div><div class="meta">NO pool<br><strong>${fmt(m.totalNo)}</strong></div></div>
+  <div class="meta">Your YES: ${fmt(y)} · Your NO: ${fmt(n)}</div>`;
+  if(!ended&&!resolved)html+=`<div class="actions"><button class="yes" data-action="yes">Bet YES</button><button class="no" data-action="no">Bet NO</button></div>`;
+  if(ended&&!resolved&&creator)html+=`<div class="actions"><button class="yes" data-action="resolveYes">Resolve YES</button><button class="no" data-action="resolveNo">Resolve NO</button></div>`;
+  if(resolved&&!claimed&&(y>0n||n>0n))html+=`<button class="full" data-action="claim">Claim reward / refund</button>`;
+  card.innerHTML=html;
+  card.querySelector('[data-action="yes"]')?.addEventListener('click',()=>placeBet(id,true));
+  card.querySelector('[data-action="no"]')?.addEventListener('click',()=>placeBet(id,false));
+  card.querySelector('[data-action="resolveYes"]')?.addEventListener('click',()=>resolveMarket(id,true));
+  card.querySelector('[data-action="resolveNo"]')?.addEventListener('click',()=>resolveMarket(id,false));
+  card.querySelector('[data-action="claim"]')?.addEventListener('click',()=>claimReward(id));
+  $('markets').appendChild(card);
+ }
+ }catch(e){if(showError)alert("Markets load failed: "+(e.shortMessage||e.reason||e.message||e));$('markets').innerHTML='<div class="empty">Market load করা যায়নি। Network, contract address ও deployed ABI verify করো।</div>';}
+}
+if(window.ethereum){window.ethereum.on?.("accountsChanged",()=>location.reload());window.ethereum.on?.("chainChanged",()=>location.reload());}
+</script></body></html>
